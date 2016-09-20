@@ -16,9 +16,9 @@ fullset = mnist.traindataset()
 testset = mnist.testdataset()
 
 trainset = {
-    size = 70000,
-    data = torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
-    label = torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
+    size = 10000, --70000,
+    data = testset.data[{{1,10000}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
+    label = testset.label[{{1,10000}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
 }
 
 trainset.data = trainset.data:cuda()
@@ -259,8 +259,7 @@ e2e_finetune = function(batch_size)
 end
 
 -- n_points is the size of dataset, delta is the weight of the gradient of log-likelihood function
-train = function(batch_size, n_epoches, n_points, delta) 
-    batch_size = batch_size or 200
+train = function(n_epoches, sample_times, n_points, delta) 
     sgd_params.learningRate = 0.01
     sgd_params.weightDecay = 0
     sgd_params.momentum = 0.9
@@ -283,6 +282,7 @@ train = function(batch_size, n_epoches, n_points, delta)
 
     -- record tables
     local tables = {}
+    local n_tables = n_points
     for i = 1, n_points do
         tables[i] = {}
         table.insert(tables[i], i)
@@ -348,8 +348,8 @@ train = function(batch_size, n_epoches, n_points, delta)
     local gibbs_sample = function( z )
 
         for i = 1, n_points do
-            if i % 100 == 0 then
-                print(string.format("[%s], gibbs sampling, point: #%d", os.date("%c", os.time()), i))
+            if i % 1 == 0 then
+                print(string.format("[%s], gibbs sampling, point: #%d, # of tables: %d", os.date("%c", os.time()), i, n_tables))
             end
 
             -- cache the table_probability of two joint tables
@@ -443,6 +443,7 @@ train = function(batch_size, n_epoches, n_points, delta)
                     table.insert(tables[belong[target]], tables[i][j])
                     belong[tables[i][j]] = belong[target]
                 end
+                n_tables = n_tables - 1
                 tables[i] = {}
                 table_probabilitys[i] = 0
                 table_probabilitys[belong[target]] = joint_table_probabilitys[belong[target]]
@@ -513,10 +514,17 @@ train = function(batch_size, n_epoches, n_points, delta)
         -- However, if the field sizeAverage is set to false, the losses are instead summed
         local loss = criterion:forward(model:forward(trainset.data), trainset.data)
         local z = model.modules[8].output:double() --z is the hidden features
-        gibbs_sample(z)
-        model:backward(trainset.data, criterion:backward(model.output, trainset.data))
+        
+        -- reset the table_probabilitys because z is changed
+        table_probabilitys:fill(0)
+        for ite = 1, sample_times do
+            gibbs_sample(z)
+        end
+
         cal_gradient(z)
         dz = dz:cuda() * delta
+
+        model:backward(trainset.data, criterion:backward(model.output, trainset.data))
         inference_net:backward(trainset.data, dz)
 
         return loss, dl_dx
@@ -557,7 +565,7 @@ end
 -- eval(testset, batch_size)
 
 print("Start training...")
-train(batch_size, 100, 70000, 0.1)
+train(100, 10, trainset.size, 0.1)
 
 
 -- linear = model.modules[4]
