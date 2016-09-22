@@ -17,8 +17,8 @@ testset = mnist.testdataset()
 
 trainset = {
     size = 10000, --70000,
-    data = testset.data[{{1,10000}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
-    label = testset.label[{{1,10000}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
+    data = fullset.data[{{1,10000}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
+    label = fullset.label[{{1,10000}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
 }
 
 trainset.data = trainset.data:cuda()
@@ -316,6 +316,7 @@ train = function(n_epoches, sample_times, n_points, delta)
     local table_probability = function(h)
         -- maybe doesnot need to calculate this everytime: save h and lambda_nk and so on
         table_size = h:size(1)
+        print(table_size)
         local kappa_nk = kappa_0 + table_size
         local nu_nk = nu_0 + table_size
         local h_mean = torch.mean(h, 1):view(1,d)
@@ -381,7 +382,7 @@ train = function(n_epoches, sample_times, n_points, delta)
             for j = 1, nk_i do
                 h_i[j] = z[tables[i][j]]
             end
-            local table_probability_i = table_probability(h_i)
+            table_probabilitys[i] = table_probability(h_i)
 
 
             assert(belong[i] == i, "i must be the first of the new table")
@@ -409,7 +410,7 @@ train = function(n_epoches, sample_times, n_points, delta)
                     end
                     
                     -- equation 7, part 3
-                    probability[j] = probability[j] * joint_table_probabilitys[belong[j]] / table_probabilitys[belong[j]] / table_probability_i
+                    probability[j] = probability[j] * joint_table_probabilitys[belong[j]] / table_probabilitys[belong[j]] / table_probabilitys[i]
                     
                 end
                 sum_pro = sum_pro + probability[j]
