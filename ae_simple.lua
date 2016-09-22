@@ -9,29 +9,12 @@ print(string.format("GPU number: %d", cutorch.getDeviceCount()))
 cutorch.setDevice(2)
 print(string.format("Using GPU %d", cutorch.getDevice()))
 
---require 'itorch'
 mnist = require 'mnist'
-
 fullset = mnist.traindataset()
 testset = mnist.testdataset()
 
-trainset = {
-    size = 10000, --70000,
-    data = fullset.data[{{1,10000}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
-    label = fullset.label[{{1,10000}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
-}
-
-trainset.data = trainset.data:cuda()
-trainset.label = trainset.label:cuda()
-
--- validationset = {
---     size = 10000,
---     data = fullset.data[{{50001,60000}}]:double() / 256,
---     label = fullset.label[{{50001,60000}}]
--- }
 
 model_name = "mnist_ae"
-
 model = nn.Sequential()
 model:add(nn.Reshape(28*28))
 model:add(nn.Linear(28*28, 500))
@@ -297,7 +280,7 @@ gibbs_sample = function(z, n_points)
 
     for i = 1, n_points do
         -- print(i)
-        if i % 1000 == 0 then
+        if i % 10000 == 0 then
             print(string.format("[%s], gibbs sampling, point: #%d, # of tables: %d", os.date("%c", os.time()), i, n_tables))
         end
 
@@ -483,11 +466,22 @@ cal_gradient = function(z, n_points)
 end
 
 -- n_points is the size of dataset, delta is the weight of the gradient of log-likelihood function
-train = function(n_epoches, sample_times, K, delta) 
-    sgd_params.learningRate = 0.01
+train = function(n_points, n_epoches, sample_times, K, delta, lr) 
+    -- date set config
+    trainset = {
+        size = n_points, --70000,
+        data = fullset.data[{{1,n_points}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
+        label = fullset.label[{{1,n_points}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
+    }
+    trainset.data = trainset.data:cuda()
+    trainset.label = trainset.label:cuda()
+
+    -- sgd parameters
+    sgd_params.learningRate = lr
     sgd_params.weightDecay = 0
     sgd_params.momentum = 0.9
     sgd_params.learningRateDecay = 0
+
     local x, dl_dx = model:getParameters()
     local inference_net = nn.Sequential():cuda()
     inference_net:add(model.modules[1])
@@ -515,7 +509,7 @@ train = function(n_epoches, sample_times, K, delta)
         table.insert(connected[i], i)
     end
     
-    -- eval function
+    -- eval function for sgd optimizer
     local feval = function(x_new)
         if x ~= x_new then x:copy(x_new) end
         dl_dx:zero()
@@ -554,20 +548,6 @@ train = function(n_epoches, sample_times, K, delta)
     end
 end
 
--- eval function of the auto-encoder
-eval = function(dataset, batch_size)
-    local loss = 0
-    batch_size = batch_size or 200
-    
-    for i = 1,dataset.size,batch_size do
-        local size = math.min(i + batch_size - 1, dataset.size) - i
-        local inputs = dataset.data[{{i,i+size-1}}]
-        local outputs = model:forward(inputs)
-        loss = criterion:forward(model:forward(inputs), inputs)
-        print(string.format("Eval loss on test set, iter: %d, loss: %4f", i, loss))
-    end
-
-end
 
 if not path.exists(model_name) then
     layerwise_pretrain(batch_size)
@@ -577,26 +557,7 @@ else
     model = torch.load(model_name)
 end
 
--- print("Loss on test set of pretrained model:")
--- testset.data = testset.data:double() / 256
--- testset.data = testset.data:cuda()
--- eval(testset, batch_size)
 
 print(string.format("[%s], start training...", os.date("%c", os.time())))
-train(100, 3, 3, 0.0000015)
+train(10000, 100, 3, 3, 0.0000015, 0.1)
 
-
--- linear = model.modules[4]
-
--- vec = torch.zeros(layer_size)
--- vec[1] = 1
-
--- translate = nn.Sequential()
--- translate:add(linear)
--- translate:add(nn.Reshape(28, 28))
-
--- itorch.image(translate:forward(vec))
-
--- basis = torch.eye(layer_size)
-
--- itorch.image(translate:forward(basis))
