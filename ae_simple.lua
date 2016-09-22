@@ -13,7 +13,6 @@ mnist = require 'mnist'
 fullset = mnist.traindataset()
 testset = mnist.testdataset()
 
-
 model_name = "mnist_ae"
 model = nn.Sequential()
 model:add(nn.Reshape(28*28))
@@ -36,63 +35,12 @@ model:add(nn.Linear(500, 28*28))
 model:add(nn.Reshape(28, 28))
 
 for i=1,model:size() do
-    --print (model.modules[i])
     if model.modules[i].weight then
         model.modules[i].weight = torch.randn(model.modules[i].weight:size()) * 0.01
     end
 end
-
 model = model:cuda()
 --torch.save(model_name, model)
-
-pair={}
-pair[1] = nn.Sequential()
-pair[1]:add(model.modules[1])
-pair[1]:add(model.modules[2])
-pair[1]:add(model.modules[3])
-pair[1]:add(nn.Dropout(0.2))
-pair[1]:add(model.modules[15])
-pair[1]:add(model.modules[16])
-
-pair[2] = nn.Sequential()
-pair[2]:add(nn.Dropout(0.2))
-pair[2]:add(model.modules[4])
-pair[2]:add(model.modules[5])
-pair[2]:add(nn.Dropout(0.2))
-pair[2]:add(model.modules[13])
-pair[2]:add(model.modules[14])
-
-pair[3] = nn.Sequential()
-pair[3]:add(nn.Dropout(0.2))
-pair[3]:add(model.modules[6])
-pair[3]:add(model.modules[7])
-pair[3]:add(nn.Dropout(0.2))
-pair[3]:add(model.modules[11])
-pair[3]:add(model.modules[12])
-
-pair[4] = nn.Sequential()
-pair[4]:add(nn.Dropout(0.2))
-pair[4]:add(model.modules[8])
-pair[4]:add(model.modules[9])
-pair[4]:add(model.modules[10])
-
-for i = 1,4 do
-    pair[i] = pair[i]:cuda()
-end
-
-extractor = {}
-extractor[2] = 3
-extractor[3] = 5
-extractor[4] = 7
-
-feature_size = {}
-feature_size[2] = 500
-feature_size[3] = 500
-feature_size[4] = 2000
-
-batch_size = 256
-base_lr = 0.1
-lr_decay = 20000
 
 sgd_params = {
    learningRate = 0.1,
@@ -105,14 +53,60 @@ criterion = nn.MSECriterion()
 criterion = criterion:cuda()
 
 -- layer-wise pretrain the auto-encoder
-layerwise_pretrain = function(batch_size)
+layerwise_pretrain = function(batch_size, trainset)
     batch_size = batch_size or 200
+    local base_lr = 0.1
+    local lr_decay = 20000
+
+    local pair={}
+    pair[1] = nn.Sequential()
+    pair[1]:add(model.modules[1])
+    pair[1]:add(model.modules[2])
+    pair[1]:add(model.modules[3])
+    pair[1]:add(nn.Dropout(0.2))
+    pair[1]:add(model.modules[15])
+    pair[1]:add(model.modules[16])
+
+    pair[2] = nn.Sequential()
+    pair[2]:add(nn.Dropout(0.2))
+    pair[2]:add(model.modules[4])
+    pair[2]:add(model.modules[5])
+    pair[2]:add(nn.Dropout(0.2))
+    pair[2]:add(model.modules[13])
+    pair[2]:add(model.modules[14])
+
+    pair[3] = nn.Sequential()
+    pair[3]:add(nn.Dropout(0.2))
+    pair[3]:add(model.modules[6])
+    pair[3]:add(model.modules[7])
+    pair[3]:add(nn.Dropout(0.2))
+    pair[3]:add(model.modules[11])
+    pair[3]:add(model.modules[12])
+
+    pair[4] = nn.Sequential()
+    pair[4]:add(nn.Dropout(0.2))
+    pair[4]:add(model.modules[8])
+    pair[4]:add(model.modules[9])
+    pair[4]:add(model.modules[10])
+
+    for i = 1,4 do
+        pair[i] = pair[i]:cuda()
+    end
+
+    local extractor = {}
+    extractor[2] = 3
+    extractor[3] = 5
+    extractor[4] = 7
+
+    local feature_size = {}
+    feature_size[2] = 500
+    feature_size[3] = 500
+    feature_size[4] = 2000
+
     for i = 1,4 do
         print("Training a pair...")
         print(pair[i])
         local x, dl_dx = pair[i]:getParameters()
-        x = x:cuda()
-        dl_dx = dl_dx:cuda()
         local iters = 0
         local n_iters = 50000
         local featureset = nil
@@ -179,7 +173,7 @@ end
 
 
 -- end to end pretrain the auto-encoder
-e2e_finetune = function(batch_size)
+e2e_finetune = function(batch_size, trainset)
     local x, dl_dx = model:getParameters()
     local iters = 0
     local n_iters = 100000
@@ -187,6 +181,8 @@ e2e_finetune = function(batch_size)
     state.evalCounter = 0
     state.dfdx = nil
     batch_size = batch_size or 200
+    local base_lr = 0.1
+    local lr_decay = 20000
     while 1 do
         local shuffle = torch.randperm(trainset.size):cuda()
         
@@ -229,21 +225,17 @@ e2e_finetune = function(batch_size)
     end
 end
 
+-- hidden feature size
 local d = 10
-local mu_0 = torch:DoubleTensor(d):fill(0)
-
 -- a point belong to which table
 local belong = nil
 -- a point is connected to which point
 local connect = nil
-
 -- record tables
 local tables = {}
 local n_tables = nil
-
 -- a point connected by which points
 local connected = {}
-
 
 -- calculate the probability of a table
 table_probability = function(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_ij)
@@ -468,7 +460,7 @@ end
 -- n_points is the size of dataset, delta is the weight of the gradient of log-likelihood function
 train = function(n_points, n_epoches, sample_times, K, delta, lr) 
     -- date set config
-    trainset = {
+    local trainset = {
         size = n_points, --70000,
         data = fullset.data[{{1,n_points}}]:double()/256,--torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
         label = fullset.label[{{1,n_points}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
@@ -483,6 +475,10 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr)
     sgd_params.learningRateDecay = 0
 
     local x, dl_dx = model:getParameters()
+    local state = {}
+    state.evalCounter = 0
+    state.dfdx = nil
+
     local inference_net = nn.Sequential():cuda()
     inference_net:add(model.modules[1])
     inference_net:add(model.modules[2])
@@ -543,15 +539,22 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr)
     end
 
     for epoch = 1, n_epoches do
-        _, fs = optim.sgd(feval, x, sgd_params)
+        _, fs = optim.sgd(feval, x, sgd_params, state)
         print (string.format('Jointly training, epoch: %d, current loss: %4f', epoch, fs[1]))
     end
 end
 
 
 if not path.exists(model_name) then
-    layerwise_pretrain(batch_size)
-    e2e_finetune(batch_size)
+    local trainset = {
+        size = 70000,
+        data = torch.cat(fullset.data[{{1,60000}}], testset.data[{{1,10000}}], 1):double() / 256,
+        label = torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
+    }
+    trainset.data = trainset.data:cuda()
+    
+    layerwise_pretrain(256, trainset)
+    e2e_finetune(256, trainset)
     torch.save(model_name, model)
 else 
     model = torch.load(model_name)
