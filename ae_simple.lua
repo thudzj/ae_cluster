@@ -4,16 +4,17 @@ require 'optim'
 require 'cunn'
 require 'cutorch'
 require 'cephes'
+require 'itorch'
 
 print(string.format("GPU number: %d", cutorch.getDeviceCount()))
-cutorch.setDevice(2)
+cutorch.setDevice(3)
 print(string.format("Using GPU %d", cutorch.getDevice()))
 
 mnist = require 'mnist'
 fullset = mnist.traindataset()
 testset = mnist.testdataset()
 
-model_name = "mnist_ae"
+model_name = "models/mnist_ae"
 model = nn.Sequential()
 model:add(nn.Reshape(28*28))
 model:add(nn.Linear(28*28, 500))
@@ -241,9 +242,9 @@ local connected = {}
 table_probability = function(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_ij)
     -- maybe doesnot need to calculate this everytime: save h and lambda_nk and so on
     local rnt = math.exp( 
-            nk_ij*nk_ij/2/(nk_ij+1)*(torch.norm(h_ij_mean)^2)
-            - nk_i*nk_i/2/(nk_i+1)*(torch.norm(h_i_mean)^2)
-            - nk_j*nk_j/2/(nk_j+1)*(torch.norm(h_j_mean)^2)) 
+            nk_ij*nk_ij/2/(nk_ij+1)*h_ij_mean
+            - nk_i*nk_i/2/(nk_i+1)*h_i_mean
+            - nk_j*nk_j/2/(nk_j+1)*h_j_mean)
         *math.sqrt(nk_i+1) * math.sqrt(nk_j+1) / math.sqrt(nk_ij+1)
     if rnt == math.huge then
         print("!!!Attention: table's probability is inf now!!!")
@@ -305,39 +306,36 @@ gibbs_sample = function(z, n_points)
         for j = 1, nk_i do
             h_i[j] = z[tables[i][j]]
         end
-        local h_i_mean = torch.mean(h_i, 1)
+        local h_i_mean = torch.norm(torch.mean(h_i, 1))^2
 
         assert(belong[i] == i, "i must be the first of the new table")
         -- sample the new c_i
         for j = 1, i - 1 do
             -- equation 7, part 2
             probability[j] = math.exp(-torch.norm(z[i] - z[j]))
-            if belong[i] ~= belong[j] then
-                -- if not in cache
-                if proportion[belong[j]] == nil then
-                    local nk_j = #tables[belong[j]]
-                    local h_j = torch.DoubleTensor(nk_j, d)
-                    for jj = 1, nk_j do
-                        h_j[jj] = z[tables[belong[j]][jj]]
-                    end
-                    local h_j_mean = torch.mean(h_j, 1)
-                    local h_ij_mean = torch.mean(torch.cat(h_i, h_j, 1), 1)
-                    
-                    proportion[belong[j]] = table_probability(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_j+nk_i)
-                    -- print (nk_i, nk_j, table_probabilitys[belong[j]], joint_table_probabilitys[belong[j]], table_probability_i)
-
+            assert(belong[i] ~= belong[j], "belong[i] ~= belong[j]")
+            -- if not in cache
+            if proportion[belong[j]] == nil then
+                local nk_j = #tables[belong[j]]
+                local h_j = torch.DoubleTensor(nk_j, d)
+                for jj = 1, nk_j do
+                    h_j[jj] = z[tables[belong[j]][jj]]
                 end
+                local h_j_mean = torch.norm(torch.mean(h_j, 1))^2
+                local h_ij_mean = torch.norm(torch.mean(torch.cat(h_i, h_j, 1), 1))^2
                 
-                -- equation 7, part 3
-                probability[j] = probability[j] * proportion[belong[j]]
-                
+                proportion[belong[j]] = table_probability(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_j+nk_i)
             end
+            
+            -- equation 7, part 3
+            probability[j] = probability[j] * proportion[belong[j]]
+                
             sum_pro = sum_pro + probability[j]
         end
 
         -- equation 7, part 1
-        probability[i] = 1
-        sum_pro = sum_pro + 1
+        probability[i] = 1e-6
+        sum_pro = sum_pro + 1e-6
 
         -- gibbs sampling
         local U = torch.uniform(0, sum_pro)
@@ -439,7 +437,7 @@ cal_gradient = function(z, n_points)
     for table_id, table in pairs(tables) do
         local nk = #table
         if nk > 0 then
-            print(string.format("[%s], table: %d, size: %d", os.date("%c", os.time()), table_id, nk))
+            -- print(string.format("[%s], table: %d, size: %d", os.date("%c", os.time()), table_id, nk))
             local h = torch.CudaTensor(nk, d)
             for i = 1, nk do
                 h[i] = z[table[i]]
@@ -447,18 +445,61 @@ cal_gradient = function(z, n_points)
             local h_mean = torch.mean(h, 1):view(1,d)
             local h_ = -(nk/(nk+1)*h_mean):expandAs(h) + h
 
-            l2_loss = l2_loss + nk*nk/2/(nk+1)*(torch.norm(h_mean)^2) - 0.5*(torch.norm(h)^2) - 0.5*math.log(nk+1) - 0.5*nk*d*math.log(2*math.pi)
+            l2_loss = l2_loss - nk*nk/2/(nk+1)*(torch.norm(h_mean)^2) + 0.5*(torch.norm(h)^2) + 0.5*math.log(nk+1) + 0.5*nk*d*math.log(2*math.pi)
             
             for i = 1, nk do
                 dz[table[i]] = h_[i]
             end
         end
     end
-    return l1_loss, -l2_loss, dz
+    return l1_loss, l2_loss, dz
+end
+
+visualize = function(labels, z, epoch)
+    local x = torch.Tensor(labels:size())
+    local y = torch.Tensor(labels:size())
+
+    local cnt = 0
+    local table_heads = nil
+    local maps = {}
+    for table_id, table in pairs(tables) do
+        if #table > 0 then
+            cnt = cnt + 1
+            maps[cnt] = table_id
+            if table_heads == nil then
+                table_heads = z[table_id]:view(1, d)
+            else
+                table_heads = torch.cat(table_heads, z[table_id]:view(1,d), 1)
+            end
+        end
+    end
+
+    local mean = torch.mean(table_heads, 1) -- 1 x n
+    local m = table_heads:size(1)
+    local Xm = table_heads - torch.ones(m, 1) * mean
+    Xm:div(math.sqrt(m - 1))
+    vecs,s_,_ = torch.svd(Xm:t())
+    X_hat = (table_heads - torch.ones(m,1) * mean) * vecs[{ {},{1, 2} }]
+
+    for i = 1, #maps do
+        x[maps[i]] = X_hat[i][1]
+        y[maps[i]] = X_hat[i][2]
+    end
+
+    for table_id, table in pairs(tables) do
+        for i = 1, #table do
+            if table[i] ~= table_id then
+                x[table[i]] = torch.randn(1)*0.1 + x[table_id]
+                y[table[i]] = torch.randn(1)*0.1 + y[table_id]
+            end
+        end
+    end
+
+    itorch.Plot():gscatter(x,y,labels):title(string.format('Epoch %d clustering result', epoch)):save(string.format('visualization/visualization_%d.html', epoch))
 end
 
 -- n_points is the size of dataset, delta is the weight of the gradient of log-likelihood function
-train = function(n_points, n_epoches, sample_times, K, delta, lr) 
+train = function(n_points, n_epoches, sample_times, K, delta, lr, lr_decay) 
     -- date set config
     local trainset = {
         size = n_points, --70000,
@@ -466,7 +507,6 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr)
         label = fullset.label[{{1,n_points}}]--torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
     }
     trainset.data = trainset.data:cuda()
-    trainset.label = trainset.label:cuda()
 
     -- sgd parameters
     sgd_params.learningRate = lr
@@ -527,7 +567,7 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr)
             l1_loss, l2_loss, dz = cal_gradient(model.modules[8].output, n_points)
             dz = dz:cuda() * delta / K
             loss = loss + (l1_loss + l2_loss) * delta / K
-            print(ite, l1_loss, l2_loss)
+            print(string.format("Loss1: %f, loss2: %f", l1_loss, l2_loss))
 
             -- local ttmp = dl_dx:clone()
             inference_net:backward(trainset.data, dz)
@@ -539,7 +579,9 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr)
     end
 
     for epoch = 1, n_epoches do
+        sgd_params.learningRate = lr * math.pow(0.1, epoch / lr_decay)
         _, fs = optim.sgd(feval, x, sgd_params, state)
+        visualize(trainset.label, model.modules[8].output:double(), epoch)
         print (string.format('Jointly training, epoch: %d, current loss: %4f', epoch, fs[1]))
     end
 end
@@ -552,7 +594,7 @@ if not path.exists(model_name) then
         label = torch.cat(fullset.label[{{1,60000}}], testset.label[{{1,10000}}],1)
     }
     trainset.data = trainset.data:cuda()
-    
+
     layerwise_pretrain(256, trainset)
     e2e_finetune(256, trainset)
     torch.save(model_name, model)
@@ -562,5 +604,5 @@ end
 
 
 print(string.format("[%s], start training...", os.date("%c", os.time())))
-train(10000, 100, 3, 3, 0.0000015, 0.1)
+train(10000, 100, 4, 2, 0.000002, 0.1, 10)
 
