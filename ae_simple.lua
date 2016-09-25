@@ -7,7 +7,7 @@ require 'cephes'
 require 'itorch'
 
 print(string.format("GPU number: %d", cutorch.getDeviceCount()))
-cutorch.setDevice(3)
+cutorch.setDevice(4)
 print(string.format("Using GPU %d", cutorch.getDevice()))
 
 mnist = require 'mnist'
@@ -272,10 +272,6 @@ end
 gibbs_sample = function(z, n_points)
 
     for i = 1, n_points do
-        -- print(i)
-        if i % 10000 == 0 then
-            print(string.format("[%s], gibbs sampling, point: #%d, # of tables: %d", os.date("%c", os.time()), i, n_tables))
-        end
 
         -- cache the proportion in the part 3 of equation 7
         local proportion = {}
@@ -366,12 +362,25 @@ gibbs_sample = function(z, n_points)
             tables[i] = {}
 
         end
+
+        local cnt = 0
+        local cnt2 = 0
+        for table_id, table in pairs(tables) do
+            cnt2 = cnt2 + #table
+            if #table > 0 then
+                cnt = cnt + 1
+            end
+        end
+
+        if i % 10000 == 0 then
+            print(string.format("   [%s], gibbs sampling, point: #%d, # of tables: %d, cnt: %d, cnt2: %d", os.date("%c", os.time()), i, n_tables, cnt, cnt2))
+        end
         
     end
 end
 
 cal_gradient = function(z, n_points)
-    print(string.format("[%s], calculate gradient of DDCRP", os.date("%c", os.time())))
+    print(string.format("   [%s], calculating gradient of DDCRP", os.date("%c", os.time())))
     local dz = torch.CudaTensor(z:size()):fill(0)
     local sum_f_ii = torch.CudaTensor(n_points):fill(0)
     -- set sum_f_ii to be: sum^i_1(distanc_{i, j})
@@ -495,7 +504,7 @@ visualize = function(labels, z, epoch)
         end
     end
 
-    itorch.Plot():gscatter(x,y,labels):title(string.format('Epoch %d clustering result', epoch)):save(string.format('visualization/visualization_%d.html', epoch))
+    itorch.Plot():gscatter(x,y,labels):title(string.format('Epoch %d clustering result(clusters: %d)', epoch, n_tables)):save(string.format('visualization/visualization_%d.html', epoch))
 end
 
 -- n_points is the size of dataset, delta is the weight of the gradient of log-likelihood function
@@ -553,7 +562,7 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr, lr_decay)
         -- By default, the losses are averaged over observations for each minibatch. 
         -- However, if the field sizeAverage is set to false, the losses are instead summed
         local loss = criterion:forward(model:forward(trainset.data), trainset.data)
-        print(string.format("[%s], auto-encoder loss: %4f", os.date("%c", os.time()), loss))
+        print(string.format("   [%s], auto-encoder loss: %4f", os.date("%c", os.time()), loss))
         model:backward(trainset.data, criterion:backward(model.output, trainset.data))
 
         local z = model.modules[8].output:double() --z is the hidden features
@@ -567,7 +576,7 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr, lr_decay)
             l1_loss, l2_loss, dz = cal_gradient(model.modules[8].output, n_points)
             dz = dz:cuda() * delta / K
             loss = loss + (l1_loss + l2_loss) * delta / K
-            print(string.format("Loss1: %f, loss2: %f", l1_loss, l2_loss))
+            print(string.format("   [%s], loss1: %f, loss2: %f", os.date("%c", os.time()), l1_loss, l2_loss))
 
             -- local ttmp = dl_dx:clone()
             inference_net:backward(trainset.data, dz)
@@ -580,9 +589,14 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr, lr_decay)
 
     for epoch = 1, n_epoches do
         sgd_params.learningRate = lr * math.pow(0.1, epoch / lr_decay)
+        if epoch == 6 then
+            sample_times = 4
+        elseif epoch == 11 then
+            sample_times = 2
+        end
         _, fs = optim.sgd(feval, x, sgd_params, state)
         visualize(trainset.label, model.modules[8].output:double(), epoch)
-        print (string.format('Jointly training, epoch: %d, current loss: %4f', epoch, fs[1]))
+        print (string.format('[%s], jointly training, epoch: %d, current loss: %4f', os.date("%c", os.time()), epoch, fs[1]))
     end
 end
 
@@ -604,5 +618,5 @@ end
 
 
 print(string.format("[%s], start training...", os.date("%c", os.time())))
-train(10000, 100, 4, 2, 0.000002, 0.1, 10)
+train(10000, 100, 8, 2, 0.000002, 0.1, 20)
 
