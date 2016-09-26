@@ -242,13 +242,17 @@ local connected = {}
 table_probability = function(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_ij)
     -- maybe doesnot need to calculate this everytime: save h and lambda_nk and so on
     local rnt = math.exp( 
-            nk_ij*nk_ij/2/(nk_ij+1)*h_ij_mean
+            (nk_ij*nk_ij/2/(nk_ij+1)*h_ij_mean
             - nk_i*nk_i/2/(nk_i+1)*h_i_mean
-            - nk_j*nk_j/2/(nk_j+1)*h_j_mean)
+            - nk_j*nk_j/2/(nk_j+1)*h_j_mean)/math.pi)
         *math.sqrt(nk_i+1) * math.sqrt(nk_j+1) / math.sqrt(nk_ij+1)
     if rnt == math.huge then
         print("!!!Attention: table's probability is inf now!!!")
     end
+    -- if rnt == 0 then
+    --     print("!!!Attention: table's probability is 0 now!!!")
+    --     print(h_i_mean, h_j_mean, h_ij_mean, nk_i, nk_j, nk_ij)
+    -- end
     return rnt
 end
 
@@ -330,8 +334,8 @@ gibbs_sample = function(z, n_points)
         end
 
         -- equation 7, part 1
-        probability[i] = 1e-6
-        sum_pro = sum_pro + 1e-6
+        probability[i] = 1
+        sum_pro = sum_pro + 1
 
         -- gibbs sampling
         local U = torch.uniform(0, sum_pro)
@@ -452,9 +456,9 @@ cal_gradient = function(z, n_points)
                 h[i] = z[table[i]]
             end
             local h_mean = torch.mean(h, 1):view(1,d)
-            local h_ = -(nk/(nk+1)*h_mean):expandAs(h) + h
+            local h_ = (h-(nk/(nk+1)*h_mean):expandAs(h))/math.pi
 
-            l2_loss = l2_loss - nk*nk/2/(nk+1)*(torch.norm(h_mean)^2) + 0.5*(torch.norm(h)^2) + 0.5*math.log(nk+1) + 0.5*nk*d*math.log(2*math.pi)
+            l2_loss = l2_loss - nk*nk/2/math.pi/(nk+1)*(torch.norm(h_mean)^2) + (torch.norm(h)^2)/2/math.pi + 0.5*math.log(nk+1) + 0.5*nk*d*math.log(2*math.pi)
             
             for i = 1, nk do
                 dz[table[i]] = h_[i]
@@ -597,6 +601,21 @@ train = function(n_points, n_epoches, sample_times, K, delta, lr, lr_decay)
         _, fs = optim.sgd(feval, x, sgd_params, state)
         visualize(trainset.label, model.modules[8].output:double(), epoch)
         print (string.format('[%s], jointly training, epoch: %d, current loss: %4f', os.date("%c", os.time()), epoch, fs[1]))
+        if epoch == 10 then
+            torch.save(model_name .. "_10", model)
+        end
+        if epoch == 15 then
+            torch.save(model_name .. "_15", model)
+        end
+        if epoch == 20 then
+            torch.save(model_name .. "_20", model)
+        end
+        if epoch == 25 then
+            torch.save(model_name .. "_25", model)
+        end
+        if epoch == 30 then
+            torch.save(model_name .. "_30", model)
+        end
     end
 end
 
@@ -618,5 +637,5 @@ end
 
 
 print(string.format("[%s], start training...", os.date("%c", os.time())))
-train(10000, 100, 8, 2, 0.000002, 0.1, 20)
+train(10000, 100, 8, 2, 0.000002, 0.1, 30)
 
