@@ -56,7 +56,6 @@ if not path.exists(load_name) then
     model:add(nn.Linear(500, 500))
     model:add(nn.ReLU())
     model:add(nn.Linear(500, 28*28))
-    model:add(nn.Sigmoid())
     model:add(nn.Reshape(28, 28))
 
     for i=1,model:size() do

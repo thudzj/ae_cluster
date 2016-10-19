@@ -20,7 +20,6 @@ layerwise_pretrain = function(model, criterion, batch_size, sgd_params, trainset
     pair[1]:add(nn.Dropout(0.2))
     pair[1]:add(model.modules[15])
     pair[1]:add(model.modules[16])
-    pair[1]:add(model.modules[17])
 
     pair[2] = nn.Sequential()
     pair[2]:add(nn.Dropout(0.2))
